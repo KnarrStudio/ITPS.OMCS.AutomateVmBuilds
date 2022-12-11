@@ -1,0 +1,2 @@
+Hostname,IP,SubnetLength             ,Gateway                            ,IP_DNS                         ,JoinDomain               ,Domain                         ,vCenterInstance       ,Cluster                       ,VMTemplate                 ,CustomSpec                 ,Location                     ,DataStore                   ,DiskStorageFormat   ,NetworkName               ,Memory                         ,CPU                               ,DiskCapacity     
+APP0013N,192.168.0.55,24,192.168.0.1,8.8.8.8,$false,,,,,,,,,,,,
