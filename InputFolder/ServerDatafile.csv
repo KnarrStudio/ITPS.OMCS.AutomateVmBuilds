@@ -1,2 +1,2 @@
-Hostname,IP,SubnetLength             ,Gateway                            ,IP_DNS                         ,JoinDomain               ,Domain                         ,vCenterInstance       ,Cluster                       ,VMTemplate                 ,CustomSpec                 ,Location                     ,DataStore                   ,DiskStorageFormat   ,NetworkName               ,Memory                         ,CPU                               ,DiskCapacity     
-APP0013N,192.168.0.55,24,192.168.0.1,8.8.8.8,$false,,,,,,,,,,,,
+Hostname,IP,SubnetLength,Gateway,IP_DNS,JoinDomain,Domain,vCenterInstance,Cluster,VMTemplate,CustomSpec,Location,DataStore,DiskStorageFormat,NetworkName,Memory,CPU,DiskCapacity
+TestVM01,192.168.1.100,24,192.168.1.1,192.168.1.10,True,TestDomain,TestVC,TestCluster,Win2019Template,Win2019Spec,TestFolder,TestDatastore,Thin,VM Network,4,2,60
