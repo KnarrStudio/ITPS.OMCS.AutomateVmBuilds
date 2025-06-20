@@ -22,25 +22,13 @@
 
 .LINK
     VMware PowerCLI documentation: https://developer.vmware.com/powercli
+#>
 #requires -Version 3.0 -Modules VMware.VimAutomation.Core
 # Deploy Windows Server
 
 #### USER DEFINED VARIABLES #
 param(
   [string]$ServerDataFile = '.\Friday-Power\Inputs\ServerDatafile.csv'  # Path to CSV with server deployment data
-  #$Hostname = $ServerData.Hostname
-  #$IP = $ServerData.IP
-  #$JoinDomainYN = True/False
-  <#
-      Credentials
-
-      DomainAdmin = "<domain admin username>"
-      DomainAdminPassword = "<password domain admin user>"
-      LocalUser = "<local admin username>"
-      LocalPassword = "<password local admin user>"
-      vCenterUser = "administrator@vsphere.local"
-      vCenterPass = "<password vCenter admin>"
-  #>
 )
 
 Begin{
@@ -50,35 +38,41 @@ Begin{
   # Initialize the scripts array for Add-Script
   $scripts = @()
 
-  # Import server data from CSV
-  $ServerData = Import-Csv -Path $ServerDataFile
+  # Import server data from CSV with error handling
+  try {
+    $ServerData = Import-Csv -Path $ServerDataFile -ErrorAction Stop
+  } catch {
+    Write-Error "Failed to import CSV file: $ServerDataFile. $_"
+    return
+  }
 
-  # Assign variables from imported data
+  # Assign variables from imported data with validation
   $LocalUser = 'localAdmin'
   $DomainAdmin = 'domainAdmin'
-  $Hostname = $ServerData.Hostname
+  $VmName = $ServerData.Hostname
   $IP = $ServerData.IP
-  $SubnetLength = $ServerData.SubnetLength             # Subnet length in CIDR notation
-  $GW = $ServerData.Gateway                            # Gateway address
-  $IP_DNS = $ServerData.IP_DNS                         # DNS server address
-  #$IP_DNS = '192.168.0.54'   #Test
+  $SubnetLength = $ServerData.SubnetLength
+  $GW = $ServerData.Gateway
+  $IP_DNS = $ServerData.IP_DNS
+  $JoinDomainYN = $ServerData.JoinDomain
+  $Domain = $ServerData.Domain
+  $vCenterInstance = $ServerData.vCenterInstance
+  $Cluster = $ServerData.Cluster
+  $VMTemplate = $ServerData.VMTemplate
+  $CustomSpec = $ServerData.CustomSpec
+  $Location = $ServerData.Location
+  $DataStore = $ServerData.DataStore
+  $DiskStorageFormat = $ServerData.DiskStorageFormat
+  $NetworkName = $ServerData.NetworkName
+  $Memory = $ServerData.Memory
+  $CPU = $ServerData.CPU
+  $DiskCapacity = $ServerData.DiskCapacity
 
-  $JoinDomainYN = $ServerData.JoinDomain               # Should the VM join a domain?
-  $Domain = $ServerData.Domain                         # Domain to join
-  #$JoinDomainYN = $true
-  #$Domain = 'Test_Domain'
-
-  $vCenterInstance = $ServerData.vCenterInstance       # vCenter instance
-  $Cluster = $ServerData.Cluster                       # vCenter cluster
-  $VMTemplate = $ServerData.VMTemplate                 # VM template
-  $CustomSpec = $ServerData.CustomSpec                 # Customization spec
-  $Location = $ServerData.Location                     # Folder location in vCenter
-  $DataStore = $ServerData.DataStore                   # Datastore
-  $DiskStorageFormat = $ServerData.DiskStorageFormat   # Disk format (Thin/Thick)
-  $NetworkName = $ServerData.NetworkName               # Network portgroup
-  $Memory = $ServerData.Memory                         # Memory in GB
-  $CPU = $ServerData.CPU                               # Number of vCPUs
-  $DiskCapacity = $ServerData.DiskCapacity             # Disk size in GB
+  # Validate required fields
+  if (-not $VmName -or -not $VMTemplate -or -not $Cluster) {
+    Write-Error "Missing required server data (Hostname, VMTemplate, or Cluster). Check your CSV file."
+    return
+  }
 
   ### FUNCTION DEFINITIONS ################################################################################################
   # Checks if customization has started for the VM
@@ -93,7 +87,12 @@ Begin{
     $i = 60 # time-out of 5 min
     while($i -gt 0)
     {
-      $vmEvents = Get-VIEvent -Entity $VM
+      try {
+        $vmEvents = Get-VIEvent -Entity $VM -ErrorAction Stop
+      } catch {
+        Write-Warning "Failed to get events for VM ${VM}: ${_}"
+        return $false
+      }
       $startedEvent = $vmEvents | Where-Object -FilterScript {
         $_.GetType().Name -eq 'CustomizationStartedEvent'
       }
@@ -124,7 +123,12 @@ Begin{
     $i = 60 # time-out of 5 min
     while($true)
     {
-      $vmEvents = Get-VIEvent -Entity $VM
+      try {
+        $vmEvents = Get-VIEvent -Entity $VM -ErrorAction Stop
+      } catch {
+        Write-Warning "Failed to get events for VM ${VM}: ${_}"
+        return $false
+      }
       $SucceededEvent = $vmEvents | Where-Object -FilterScript {
         $_.GetType().Name -eq 'CustomizationSucceeded'
       }
@@ -141,7 +145,11 @@ Begin{
         Write-Verbose -Message ('Customization of VM {0} Completed Successfully' -f $VM) 
         Start-Sleep -Seconds 30
         Write-Verbose -Message ('Waiting for VM {0} to complete post-customization reboot' -f $VM) 
-        Wait-Tools -VM $VM -TimeoutSeconds 300
+        try {
+          Wait-Tools -VM $VM -TimeoutSeconds 300 -ErrorAction Stop
+        } catch {
+          Write-Warning "Wait-Tools failed for VM ${VM}: ${_}"
+        }
         Start-Sleep -Seconds 30
         return $true
       }
@@ -158,11 +166,15 @@ Begin{
       [Parameter(Mandatory)]
       [string]$VM
     )
-    $null = Restart-VMGuest -VM $VM -Confirm:$false
-    Write-Verbose -Message ('Reboot VM {0}' -f $VM) 
-    Start-Sleep -Seconds 60
-    $null = Wait-Tools -VM $VM -TimeoutSeconds 300
-    Start-Sleep -Seconds 10
+    try {
+      $null = Restart-VMGuest -VM $VM -Confirm:$false -ErrorAction Stop
+      Write-Verbose -Message ('Reboot VM {0}' -f $VM) 
+      Start-Sleep -Seconds 60
+      $null = Wait-Tools -VM $VM -TimeoutSeconds 300 -ErrorAction Stop
+      Start-Sleep -Seconds 10
+    } catch {
+      Write-Warning "Failed to restart VM ${VM}: ${_}"
+    }
   }
 
   # Adds a script to the list of scripts to run in the VM
@@ -189,22 +201,28 @@ Begin{
       $i++
     }
     $script:scripts += ,@($script, $reboot)
-    #$script:scripts = $null
   }
 
-
   ### READ CREDENTIALS ########################################################################################################
-  # Prompt for local and domain credentials
-  $VMLocalCredential = Get-Credential -Message 'Local Admin Account' -UserName ('{0}\{1}' -f $Hostname, $LocalUser)
-  $DomainCredential  = Get-Credential -Message 'Domain Admin Account' -UserName ('{0}\{1}' -f $Domain, $DomainAdmin)
+  # Prompt for local and domain credentials with error handling
+  try {
+    $VMLocalCredential = Get-Credential -Message 'Local Admin Account' -UserName ('{0}\{1}' -f $VmName, $LocalUser) -ErrorAction Stop
+    $DomainCredential  = Get-Credential -Message 'Domain Admin Account' -UserName ('{0}\{1}' -f $Domain, $DomainAdmin) -ErrorAction Stop
+  } catch {
+    Write-Error "Failed to get credentials: $_"
+    return
+  }
 
-  # Get template and customization spec objects
-  $SourceVMTemplate = Get-Template -Name $VMTemplate
-  $SourceCustomSpec = Get-OSCustomizationSpec -Name $CustomSpec
+  # Get template and customization spec objects with error handling
+  try {
+    $SourceVMTemplate = Get-Template -Name $VMTemplate -ErrorAction Stop
+    $SourceCustomSpec = Get-OSCustomizationSpec -Name $CustomSpec -ErrorAction Stop
+  } catch {
+    Write-Error "Failed to get template or customization spec: $_"
+    return
+  }
 }
 Process{
-
-  ### DEFINE POWERSHELL SCRIPTS TO RUN IN VM AFTER DEPLOYMENT ############################################################################################################
   # Configure network if IP is specified
   if ($IP) 
   {
@@ -223,68 +241,104 @@ Process{
     Enable-NetFirewallRule -DisplayGroup "Remote Desktop";
   Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -name UserAuthentication -Value 0'
 
-  ### DEPLOY VM ############
-  Write-Verbose -Message ('Deploying Virtual Machine with Name: [{0}] using Template: [{1}] and Customization Specification: [{2}] on cluster: [{3}]' -f $Hostname, $SourceVMTemplate, $SourceCustomSpec, $Cluster) 
-  Write-Verbose -Message ('New Virtual Machine')
-
-  # Prepare parameters for New-VM and Set-HardDisk
-  $NewVmSplat = @{
-    Name                = $Hostname
-    Template            = $SourceVMTemplate
-    ResourcePool        = $Cluster
-    OSCustomizationSpec = $SourceCustomSpec
-    Location            = $Location
-    Datastore           = $DataStore
-    DiskStorageFormat   = $DiskStorageFormat
+  # Deploy VM with error handling
+  try {
+    Write-Verbose -Message ('Deploying Virtual Machine with Name: [{0}] using Template: [{1}] and Customization Specification: [{2}] on cluster: [{3}]' -f $VmName, $SourceVMTemplate, $SourceCustomSpec, $Cluster) 
+    Write-Verbose -Message ('New Virtual Machine')
+    $NewVmSplat = @{
+      Name                = $VmName
+      Template            = $SourceVMTemplate
+      ResourcePool        = $Cluster
+      OSCustomizationSpec = $SourceCustomSpec
+      Location            = $Location
+      Datastore           = $DataStore
+      DiskStorageFormat   = $DiskStorageFormat
+    }
+    $NewHdSplat = @{
+      CapacityGB = $DiskCapacity
+      Confirm    = $false
+    }
+    $null = New-VM @NewVmSplat -ErrorAction Stop
+  } catch {
+    Write-Error "Failed to create new VM: $_"
+    return
   }
-  $NewHdSplat = @{
-    CapacityGB = $DiskCapacity
-    Confirm    = $false
-  }
-  $null = New-VM @NewVmSplat
 
   # Get the new VM object
-  $VmHost = Get-VM -Name $Hostname
-  Write-Verbose -Message ('Settng Network Adapter')
-  $null = $VmHost |
-  Get-NetworkAdapter |
-  Set-NetworkAdapter -Portgroup $NetworkName -Confirm:$false
+  try {
+    $VmHost = Get-VM -Name $VmName -ErrorAction Stop
+  } catch {
+    Write-Error "Failed to get VM object for ${VmName}: ${_}"
+    return
+  }
 
-  Write-Verbose -Message ('Settingg Memory and CPUs')
-  $null = Set-VM -VM $Hostname -NumCpu $CPU -MemoryGB $Memory -Confirm:$false
+  # Set network adapter
+  try {
+    Write-Verbose -Message ('Settng Network Adapter')
+    $null = $VmHost |
+    Get-NetworkAdapter |
+    Set-NetworkAdapter -Portgroup $NetworkName -Confirm:$false -ErrorAction Stop
+  } catch {
+    Write-Warning "Failed to set network adapter for ${VmName}: ${_}"
+  }
 
-  Write-Verbose -Message ('Setting up Second Drive')
-  $null = $VmHost |
-  Get-HardDisk |
-  Where-Object {
-    $_.Name -eq 'Hard Disk 1'
-  } |
-  Set-HardDisk @NewHdSplat
+  # Set memory and CPUs
+  try {
+    Write-Verbose -Message ('Settingg Memory and CPUs')
+    $null = Set-VM -VM $VmName -NumCpu $CPU -MemoryGB $Memory -Confirm:$false -ErrorAction Stop
+  } catch {
+    Write-Warning "Failed to set memory/CPU for ${VmName}: ${_}"
+  }
 
-  Write-Verbose -Message ('Virtual Machine {0} Deployed. Powering On' -f $Hostname) 
-  $null = Start-VM -VM $Hostname
+  # Set up second drive
+  try {
+    Write-Verbose -Message ('Setting up Second Drive')
+    $null = $VmHost |
+    Get-HardDisk |
+    Where-Object {
+      $_.Name -eq 'Hard Disk 1'
+    } |
+    Set-HardDisk @NewHdSplat -ErrorAction Stop
+  } catch {
+    Write-Warning "Failed to set up second drive for ${VmName}: ${_}"
+  }
+
+  # Power on VM
+  try {
+    Write-Verbose -Message ('Virtual Machine {0} Deployed. Powering On' -f $VmName) 
+    $null = Start-VM -VM $VmName -ErrorAction Stop
+  } catch {
+    Write-Error "Failed to power on VM ${VmName}: ${_}"
+    return
+  }
 
   # Wait for customization to start and finish
-  if (-not (Test-CustomizationStarted -VM $Hostname)) 
+  if (-not (Test-CustomizationStarted -VM $VmName)) 
   {
-    break
+    Write-Error "Customization did not start for $VmName."
+    return
   }
-  if (-not (Test-CustomizationFinished -VM $Hostname)) 
+  if (-not (Test-CustomizationFinished -VM $VmName)) 
   {
-    break
+    Write-Error "Customization did not finish for $VmName."
+    return
   }
 
   # Run post-deployment scripts in the VM
   foreach ($script in $scripts)
   {
-    $null = Invoke-VMScript -ScriptText $script[0] -VM $Hostname -GuestCredential $VMLocalCredential
-    if ($script[1]) 
-    {
-      Restart-VM -VM $Hostname
+    try {
+      $null = Invoke-VMScript -ScriptText $script[0] -VM $VmName -GuestCredential $VMLocalCredential -ErrorAction Stop
+      if ($script[1]) 
+      {
+        Restart-VM -VM $VmName
+      }
+    } catch {
+      Write-Warning "Failed to run script in VM ${VmName}: ${_}"
     }
   }
 }
 End{
   ### End of Script ##############################
-  Write-Verbose -Message ('Deployment of VM {0} finished' -f $Hostname) 
+  Write-Verbose -Message ('Deployment of VM {0} finished' -f $VmName) 
 }
