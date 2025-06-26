@@ -27,6 +27,9 @@ param(
   [int]$DecomDays = 15
 )
 
+# Moved the target OU to a variable for easier reuse
+$targetOU = 'OU=Build,OU=Services,DC=yourdomain,DC=com'
+
 # Ensure running in Windows PowerShell 5.1 or later
 if ($PSVersionTable.PSVersion.Major -lt 5 -or ($PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSVersion.Minor -lt 1)) {
     Write-Error 'This script requires Windows PowerShell 5.1 or later.'
@@ -41,29 +44,51 @@ if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
 Import-Module ActiveDirectory
 
 # Get AD computer
-$adComp = Get-ADComputer -Identity $ComputerName -Properties * -ErrorAction SilentlyContinue
+$adComp = Get-ADComputer $ComputerName -Properties * -ErrorAction SilentlyContinue
 if (-not $adComp) {
   Write-Error "Computer $ComputerName not found in AD."
   return
 }
 
-# Check for DecomDate and DecomTicket
-$hasDecomDate = $adComp.PSObject.Properties["DecomDate"] -and $adComp.DecomDate
-$hasDecomTicket = $adComp.PSObject.Properties["DecomTicket"] -and $adComp.DecomTicket
+# Check for DecomDate and DecomTicket in Description
+$desc = $adComp.Description
+$decomPattern = 'DecomDate=([0-9\-]+);DecomTicket=([^;]+)'
+$hasDecomTag = $false
+$decomDate = $null
+$decomTicket = $null
+if ($desc -and ($desc -match $decomPattern)) {
+    $hasDecomTag = $true
+    $decomDate = $matches[1]
+    $decomTicket = $matches[2]
+}
 
-if ($hasDecomDate -and $hasDecomTicket) {
-  $decomDate = [datetime]::Parse($adComp.DecomDate)
+# Define log file path (use ExportPath with .log extension)
+$logPath = [System.IO.Path]::ChangeExtension($ExportPath, '.log')
+function Write-DecomLog {
+    param([string]$Message)
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Add-Content -Path $logPath -Value ("[$timestamp] $Message")
+}
+
+if ($hasDecomTag) {
+  $decomDateObj = [datetime]::Parse($decomDate)
   $now = (Get-Date).Date
-  if ($decomDate -gt $now) {
-    Write-Host "Computer $ComputerName is already marked for decom on $decomDate (Ticket: $($adComp.DecomTicket)). No action taken."
+  if ($decomDateObj -gt $now) {
+    $msg = "Computer $ComputerName is already marked for decom on $decomDate (Ticket: $decomTicket). No action taken."
+    Write-Host $msg
+    Write-DecomLog $msg
     return
   } else {
     # Finalize: export and remove
     $exportPathFinal = "$ComputerName-FinalADExport.json"
     $adComp | ConvertTo-Json | Set-Content -Path $exportPathFinal
-    Write-Host "Exported final AD computer info to $exportPathFinal"
-    Remove-ADComputer -Identity $adComp.DistinguishedName -Confirm:$false
-    Write-Host "Removed $ComputerName from AD."
+    $msg1 = "Exported final AD computer info to $exportPathFinal"
+    $msg2 = "Removed $ComputerName from AD."
+    Write-Host $msg1
+    Write-Host $msg2
+    Write-DecomLog $msg1
+    Remove-ADComputer $adComp.DistinguishedName -Confirm:$false
+    Write-DecomLog $msg2
     return
   }
 }
@@ -77,26 +102,37 @@ $export = [PSCustomObject]@{
   WhenCreated = $adComp.WhenCreated
   MemberOf = $adComp.MemberOf
   ManagedBy = $adComp.ManagedBy
-  ntSecurityDescriptor = (Get-ADObject -Identity $adComp.DistinguishedName -Properties ntSecurityDescriptor).ntSecurityDescriptor
+  ntSecurityDescriptor = (Get-ADObject $adComp.DistinguishedName -Properties ntSecurityDescriptor).ntSecurityDescriptor
   Exported = (Get-Date)
   TicketNumber = $TicketNumber
 }
 $export | ConvertTo-Json | Set-Content -Path $ExportPath
-Write-Host "Exported AD computer info to $ExportPath"
+$msg = "Exported AD computer info to $ExportPath"
+Write-Host $msg
+Write-DecomLog $msg
 
-Disable-ADAccount -Identity $ComputerName
-Write-Host "Disabled computer account $ComputerName"
+Set-ADComputer $ComputerName -Enabled:$false
+$msg = "Disabled computer account $ComputerName"
+Write-Host $msg
+Write-DecomLog $msg
 
-# Move to Services\Build OU
-$targetOU = "OU=Build,OU=Services,DC=$(($adComp.DistinguishedName -split ',DC=')[1..-1] -join ',DC=')"
 try {
-  Move-ADObject -Identity $adComp.DistinguishedName -TargetPath $targetOU
-  Write-Host "Moved $ComputerName to $targetOU"
+  Move-ADObject $adComp.DistinguishedName -TargetPath $targetOU
+  $msg = "Moved $ComputerName to $targetOU"
+  Write-Host $msg
+  Write-DecomLog $msg
 } catch {
-  Write-Warning "Could not move $ComputerName to $targetOU: $_"
+  $msg = "Could not move $ComputerName to ${targetOU}: $_"
+  Write-Warning $msg
+  Write-DecomLog $msg
 }
 
-# Tag with DecomDate and DecomTicket
 $decomDate = (Get-Date).AddDays($DecomDays).ToString('yyyy-MM-dd')
-Set-ADComputer -Identity $ComputerName -Add @{'DecomDate'=$decomDate; 'DecomTicket'=$TicketNumber}
-Write-Host "Tagged $ComputerName with DecomDate=$decomDate and DecomTicket=$TicketNumber"
+$newDesc = "DecomDate=$decomDate;DecomTicket=$TicketNumber"
+if ($adComp.Description) {
+    $newDesc = $newDesc + ";" + $adComp.Description
+}
+Set-ADComputer $ComputerName -Description $newDesc
+$msg = "Tagged $ComputerName with $newDesc"
+Write-Host $msg
+Write-DecomLog $msg

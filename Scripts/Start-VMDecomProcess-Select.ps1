@@ -40,8 +40,11 @@ foreach ($vm in $vms) {
 }
 
 # Display and prompt for selection
-Write-Host "\nMatching VMs:"
-$vmList | Format-Table -AutoSize
+Write-Host "\nMatching VMs:" -ForegroundColor Cyan
+for ($i = 0; $i -lt $vmList.Count; $i++) {
+    $vm = $vmList[$i]
+    Write-Host ("[{0}] Name: {1} | PowerState: {2} | Folder: {3}" -f ($i+1), $vm.Name, $vm.PowerState, $vm.FolderPath)
+}
 if ($vmList.Count -gt 1) {
   $selection = Read-Host "Enter the number of the VM to decommission (1-$($vmList.Count)) or 0 to cancel"
   if ($selection -eq '0' -or -not $selection -or $selection -notmatch '^[0-9]+$' -or $selection -lt 1 -or $selection -gt $vmList.Count) {
