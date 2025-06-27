@@ -213,7 +213,7 @@ function Get-VMInfo
   return [PSCustomObject]@{
     VMName         = $vm.Name
     FQDN           = $fqdn
-    IPAddress      = $ip
+    IPAddress      = $ipAddress
     ViServer       = $ViServer
     NumCPU         = $cpu
     MemoryGB       = $memory
@@ -437,6 +437,23 @@ Select-Object -Property * |
 ConvertTo-Json -Depth 5
 Set-Content -Path $exportPath -Value $vmExport
 Write-DecomLog -Message ('Exported VM properties to {0}' -f $exportPath)
+
+# After selecting the VM and before decommissioning, display and log key VM info
+$vmInfo = Get-VMInfo -VMName $selectedVM.Name
+$parentFolder = $selectedVM.FolderPath
+$osType = (Get-VM -Name $selectedVM.Name).Guest.OSFullName
+
+# Display VM info to screen
+Write-Host ("Server Name: {0}" -f $vmInfo.VMName)
+Write-Host ("IP Address: {0}" -f $vmInfo.IPAddress)
+Write-Host ("Operating System: {0}" -f $osType)
+Write-Host ("Parent Folder: {0}" -f $parentFolder)
+
+# Log VM info
+Write-DecomLog -Message ("Server Name: {0}" -f $vmInfo.VMName)
+Write-DecomLog -Message ("IP Address: {0}" -f $vmInfo.IPAddress)
+Write-DecomLog -Message ("Operating System: {0}" -f $osType)
+Write-DecomLog -Message ("Parent Folder: {0}" -f $parentFolder)
 
 # Run the decommissioning process and log each step
 $result = Invoke-VMProcess -VMName $selectedVM.Name -TenantFolder $TenantFolder
