@@ -42,26 +42,21 @@
 
 [CmdletBinding()]
 
+# Define script parameters
 param(
-
   [Parameter(Mandatory)]
-  [string]$VMName,
-
-  [string]$TenantFolder,
-
-  [String]$TicketNumber
-
+  [string]$VMName,           # The (partial or full) name of the VM to decommission
+  [string]$TenantFolder,     # The expected folder path for validation (optional)
+  [String]$TicketNumber      # The ticket or change number for tracking and export/log file naming
 )
 
- 
-
 # vCenter connection check based on first 6 letters of VM name
-$vcShort = $VMName.Substring(0,6)
-$connectedVCs = Get-VIServer
-$foundVC = $null
+$vcShort = $VMName.Substring(0,6) # Get the first 6 characters of the VM name
+$connectedVCs = Get-VIServer      # Get all currently connected vCenter servers
+$foundVC = $null                  # Initialize variable to store the matching vCenter
 foreach ($vc in $connectedVCs) 
 {
-  if ($vc.Name -like "$vcShort*") 
+  if ($vc.Name -like "$vcShort*") # Wildcard match: does vCenter name start with the VM prefix?
   {
     $foundVC = $vc
     break
@@ -69,6 +64,7 @@ foreach ($vc in $connectedVCs)
 }
 if (-not $foundVC) 
 {
+  # Prompt user to connect to vCenter if not already connected
   $vcNameToConnect = Read-Host -Prompt ("Not connected to vCenter matching '{0}*'. Enter full vCenter name to connect" -f $vcShort)
   try 
   {
@@ -86,36 +82,26 @@ else
   Write-Host ('Already connected to vCenter: {0}' -f $foundVC.Name)
 }
 
-# Get all VMs matching the input name
-
+# Get all VMs matching the input name (wildcard search)
 $vms = Get-VM -Name "*$VMName*" -ErrorAction SilentlyContinue
-
 if (-not $vms) 
 {
   Write-Error -Message ("No VMs found matching '{0}'." -f $VMName)
-
   return
 }
 
- 
-
-# Build a list with folder paths
-
+# Build a list of VMs with their folder paths
 $vmList = @()
-
 foreach ($vm in $vms) 
 {
   $folder = $vm.Folder
-
   $folderPath = $folder.Name
-
+  # Walk up the folder tree to build the full path
   while ($folder.Parent -and $folder.Parent -ne $folder) 
   {
     $folder = $folder.Parent
-
     $folderPath = ('{0}/{1}' -f $folder.Name, $folderPath)
   }
-
   $vmList += [PSCustomObject]@{
     Name       = $vm.Name
     PowerState = $vm.PowerState
@@ -124,50 +110,41 @@ foreach ($vm in $vms)
   }
 }
 
-
-# Display and prompt for selection
-
+# Display the list of matching VMs and prompt for selection
 Write-Host "`nMatching VMs:" -ForegroundColor Cyan
-
 for ($i = 0; $i -lt $vmList.Count; $i++) 
 {
   $vm = $vmList[$i]
-
   Write-Host ('[{0}] Name: {1} | PowerState: {2} | Folder: {3}' -f ($i+1), $vm.Name, $vm.PowerState, $vm.FolderPath)
 }
 
+# If more than one VM, prompt user to select the correct one
 if ($vmList.Count -gt 1) 
 {
   $selection = Read-Host -Prompt ('Enter the number of the VM to decommission (1-{0}) or 0 to cancel' -f $vmList.Count)
-
+  # Validate selection: must be a number in range, not 0, not blank
   if ($selection -eq '0' -or -not $selection -or $selection -notmatch '^[0-9]+$' -or $selection -lt 1 -or $selection -gt $vmList.Count) 
   {
     Write-Host 'Operation cancelled.'
-
     return
   }
-
   $selectedVM = $vmList[$selection-1]
 }
 else 
 {
   $selectedVM = $vmList[0]
 }
-
-
 Write-Host ('Selected VM: {0} in folder {1}' -f $selectedVM.Name, $selectedVM.FolderPath)
- 
 
 # --- VM Decommissioning Logic ---
 
+# Function: Get-VMFQDNIPandADStatus
+# Returns FQDN, IP, and AD status for a VM
 function Get-VMFQDNIPandADStatus 
 {
   param([string]$VMName)
-
-  $CleanVMName = $VMName.Split('.- (_')[0]
-
+  $CleanVMName = $VMName.Split('.- (_')[0] # Remove any suffixes after .- or (_
   $DnsDomain = $env:USERDNSDOMAIN
-
   try 
   {
     $ipAddress = (Resolve-DnsName -Name $CleanVMName -ErrorAction Stop |
@@ -180,18 +157,15 @@ function Get-VMFQDNIPandADStatus
   {
     $ipAddress = 'Not in DNS' 
   }
-
   try 
   {
     $adObject = Get-ADComputer -Identity $CleanVMName -ErrorAction Stop
-
     $adStatus = $adObject.DistinguishedName
   }
   catch 
   {
     $adStatus = 'Not found in AD' 
   }
-
   [PSCustomObject]@{
     VMName    = $VMName
     FQDN      = "$VMName.$DnsDomain"
@@ -200,14 +174,12 @@ function Get-VMFQDNIPandADStatus
   }
 }
 
- 
-
+# Function: Get-VMInfo
+# Returns VM info including FQDN, IP, vCenter, CPU, memory, storage
 function Get-VMInfo 
 {
   param([string]$VMName)
-
   $GuessedFQDN = '{0}.knarrstudio.com' -f $VMName
-
   try 
   {
     $ipAddress = (Resolve-DnsName -Name $GuessedFQDN -ErrorAction Stop |
@@ -220,33 +192,24 @@ function Get-VMInfo
   {
     $ipAddress = 'Not in DNS' 
   }
-
   $vm = Get-VM -Name $VMName
-
   $guest = $vm.ExtensionData.Guest
-
   $fqdn = $guest.HostName
-
   $ip = $guest.IpAddress
-
+  # Extract vCenter name from VM UID
   $ViServer = ($vm | Select-Object -Property @{
       N = 'ViServer'
       E = {
         $_.uid.Split(':')[0].Split('@')[1] 
       }
   }).ViServer
-
   $cpu = $vm.NumCpu
-
   $memory = [math]::Round($vm.MemoryGB, 2)
-
   $TotalStorageGB = 0
-
   foreach ($datastorageUsage in $vm.ExtensionData.Storage.PerDatastoreUsage) 
   {
     $TotalStorageGB += [Math]::Round(($datastorageUsage.committed /1GB), 2)
   }
-
   return [PSCustomObject]@{
     VMName         = $vm.Name
     FQDN           = $fqdn
@@ -258,76 +221,53 @@ function Get-VMInfo
   }
 }
 
- 
-
+# Function: Get-FolderByPath
+# Returns a folder object by walking the folder path
 function Get-FolderByPath 
 {
   param([string]$Path, [string]$ViServer)
-
-  $parts = $Path -split '[\\/]'  # Support both / and \ as separators
-
+  $parts = $Path -split '[\\/]'  # Split path on / or \ (regex: [\\/])
   $folder = Get-Folder -Server $ViServer -Name $parts[0]
-
   for ($i = 1; $i -lt $parts.Count; $i++) 
   {
     $folder = Get-Folder -Server $ViServer -Name $parts[$i] -Location $folder
   }
-
   return $folder
 }
 
- 
-
+# Function: Invoke-VMProcess
+# Performs the decommissioning steps for a VM
 function Invoke-VMProcess 
 {
   param([string]$VMName, [string]$TenantFolder)
-
   $AlreadyPoweredOff = $false
-
   $TasksCompleted = @()
-
   $vmInfo = Get-VMInfo -VMName $VMName
-
   $vm = Get-VM -Name $VMName
-
   $VMFQDNIPandADStatus = Get-VMFQDNIPandADStatus -VMName $VMName
-
   $decomFolder = (Get-Folder -Server $vmInfo.ViServer -Name '_DECOM')[0]
-
   if ($vm.Folder.Id -eq $decomFolder.Id) 
   {
     Write-Host ("VM is already in the '_DECOM' folder. Skipping VM: {0}" -f $VMName)
-
-    $TasksCompleted += '✗ Already in _DECOM folder'
-
+    $TasksCompleted += 'Already in _DECOM folder'
     return $null
   }
-
   $tenantFolderObj = Get-FolderByPath -Path $TenantFolder -ViServer $vmInfo.ViServer
-
   if (-not $tenantFolderObj) 
   {
     Write-Host ('Could not find folder path: {0}. Skipping VM: {1}' -f $TenantFolder, $VMName)
-
-    $TasksCompleted += '✗ Tenant folder not found'
-
+    $TasksCompleted += 'Tenant folder not found'
     return $null
   }
-
   $vmFolderId = [String]$vm.FolderId
-
   $tenantFolderId = [String]$tenantFolderObj.Id
-
   if ($vmFolderId -ne $tenantFolderId) 
   {
     Write-Host ('VM {1} is not in the specified Folder {0}. Skipping VM.' -f $TenantFolder, $VMName)
-
-    $TasksCompleted += '✗ Not in specified folder'
-
+    $TasksCompleted += 'Not in specified folder'
     return $null
   }
-
-  # Shutdown
+  # Shutdown logic
   if ($vm.PowerState -eq 'PoweredOn') 
   {
     try 
@@ -388,7 +328,7 @@ function Invoke-VMProcess
   {
     $TasksCompleted += '[FAIL] Moved to _DECOM'
   }
-  # Rename
+  # Rename logic
   $currentDate = (Get-Date).ToString('MM-dd-yyyy')
   $futureDate = (Get-Date).AddDays(15).ToString('MM-dd-yyyy')
   if ($AlreadyPoweredOff) 
@@ -421,19 +361,75 @@ function Invoke-VMProcess
   }
 }
 
-
 # --- Main Execution ---
 
+# --- User/Change Validation and Info Gathering ---
+
+# Get current user ID
+$userId = $env:USERNAME
+
+# If no ticket number, prompt for NOC contact and change status, then ticket number
+if (-not $TicketNumber) {
+    $nocContacted = $false
+    $nocContactTime = $null
+    $changeImplemented = $false
+    while (-not $nocContacted) {
+        $nocContact = Read-Host -Prompt 'Have you contacted the NOC? (Y/N)'
+        if ($nocContact -match '^[Yy]') {
+            $nocContacted = $true
+            # Default NOC contact time to 30 minutes before now if blank
+            $defaultNocTime = (Get-Date).AddMinutes(-30).ToString('yyyy-MM-dd HH:mm')
+            $nocContactTime = Read-Host -Prompt "When did you contact the NOC? [default: $defaultNocTime]"
+            if ([string]::IsNullOrWhiteSpace($nocContactTime)) {
+                $nocContactTime = $defaultNocTime
+            }
+        } elseif ($nocContact -match '^[Nn]') {
+            Write-Host 'You must contact the NOC before proceeding.' -ForegroundColor Yellow
+        }
+    }
+    while (-not $changeImplemented) {
+        $changeStatus = Read-Host -Prompt 'Has the change been moved to Implement? (Y/N)'
+        if ($changeStatus -match '^[Yy]') {
+            $changeImplemented = $true
+        } elseif ($changeStatus -match '^[Nn]') {
+            Write-Host 'Change must be in Implement status before proceeding.' -ForegroundColor Yellow
+        }
+    }
+    while (-not $TicketNumber) {
+        $TicketNumber = Read-Host -Prompt 'Enter the ticket/change number'
+    }
+}
+
 # Set up export and log file paths
+# Regex: [^a-zA-Z0-9_-] matches any character that is NOT a-z, A-Z, 0-9, _ or -
+# This is used to sanitize the ticket number for safe filenames
 $ticketSafe = $TicketNumber -replace '[^a-zA-Z0-9_-]', '_'
 $exportPath = Join-Path -Path (Get-Location) -ChildPath ("$($selectedVM.Name)-$ticketSafe-VMExport.json")
 $logPath = Join-Path -Path (Get-Location) -ChildPath ("$($selectedVM.Name)-$ticketSafe-VMDecom.log")
+
+# Function: Write-DecomLog
+# Appends a timestamped message to the log file
 function Write-DecomLog 
 {
   param([string]$Message)
   $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
   Add-Content -Path $logPath -Value ("[$timestamp] $Message")
 }
+
+# Write log header with user, ticket, and NOC info
+$logHeader = @()
+$logHeader += "===== VM Decommissioning Log ====="
+$logHeader += "User: $userId"
+$logHeader += "Ticket: $TicketNumber"
+if ($nocContactTime) {
+    $logHeader += "NOC Contacted: Yes"
+    $logHeader += "NOC Contact Time: $nocContactTime"
+} else {
+    $logHeader += "NOC Contacted: Unknown"
+}
+$logHeader += "Log Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+$logHeader += "==================================="
+Set-Content -Path $logPath -Value $logHeader
 
 # Export VM properties for backup/reference
 $vmExport = Get-VM -Name $selectedVM.Name |
@@ -442,6 +438,7 @@ ConvertTo-Json -Depth 5
 Set-Content -Path $exportPath -Value $vmExport
 Write-DecomLog -Message ('Exported VM properties to {0}' -f $exportPath)
 
+# Run the decommissioning process and log each step
 $result = Invoke-VMProcess -VMName $selectedVM.Name -TenantFolder $TenantFolder
 if ($result) 
 {
@@ -450,7 +447,7 @@ if ($result)
   Format-List |
   Out-String |
   Write-Host
-  # Log each step
+  # Log each step in the TasksCompleted property (split on newlines)
   foreach( $line in $result.TasksCompleted -split "`n") 
   {
     Write-DecomLog -Message $line
