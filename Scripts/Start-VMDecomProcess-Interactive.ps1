@@ -52,7 +52,7 @@ param(
 
 # vCenter connection check based on first 6 letters of VM name
 $vcShort = $VMName.Substring(0,6) # Get the first 6 characters of the VM name
-$connectedVCs = Get-VIServer      # Get all currently connected vCenter servers
+$connectedVCs = $Global:defaultViservers     # Get all currently connected vCenter servers
 $foundVC = $null                  # Initialize variable to store the matching vCenter
 foreach ($vc in $connectedVCs) 
 {
@@ -62,25 +62,38 @@ foreach ($vc in $connectedVCs)
     break
   }
 }
+
+$ViServerList = @('NEElmi','NEPhil','SEMelb','SEAtln') # List of known vCenter names
+
 if (-not $foundVC) 
 {
-  # Prompt user to connect to vCenter if not already connected
-  $vcNameToConnect = Read-Host -Prompt ("Not connected to vCenter matching '{0}*'. Enter full vCenter name to connect" -f $vcShort)
-  try 
-  {
-    Connect-VIServer -Server $vcNameToConnect -ErrorAction Stop
-    Write-Host ('Connected to vCenter: {0}' -f $vcNameToConnect)
-  }
-  catch 
-  {
-    Write-Error -Message ('Failed to connect to vCenter: {0}. {1}' -f $vcNameToConnect, $_)
-    return
+  # Try to find a vCenter from the list that matches the prefix
+  $autoVC = $ViServerList | Where-Object { $_ -like "$vcShort*" }
+  if ($autoVC) {
+    try {
+      Connect-VIServer -Server $autoVC -ErrorAction Stop
+      Write-Host ('Connected to vCenter: {0}' -f $autoVC)
+    }
+    catch {
+      Write-Error -Message ('Failed to connect to vCenter: {0}. {1}' -f $autoVC, $_)
+      return
+    }
+  } else {
+    # Prompt user to connect to vCenter if not already connected and not in list
+    $vcNameToConnect = Read-Host -Prompt ("Not connected to vCenter matching '{0}*'. Enter full vCenter name to connect" -f $vcShort)
+    try 
+    {
+      Connect-VIServer -Server $vcNameToConnect -ErrorAction Stop
+      Write-Host ('Connected to vCenter: {0}' -f $vcNameToConnect)
+    }
+    catch 
+    {
+      Write-Error -Message ('Failed to connect to vCenter: {0}. {1}' -f $vcNameToConnect, $_)
+      return
+    }
   }
 }
-else 
-{
-  Write-Host ('Already connected to vCenter: {0}' -f $foundVC.Name)
-}
+
 
 # Get all VMs matching the input name (wildcard search)
 $vms = Get-VM -Name "*$VMName*" -ErrorAction SilentlyContinue
