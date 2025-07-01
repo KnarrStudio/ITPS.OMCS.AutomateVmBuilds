@@ -63,7 +63,7 @@ foreach ($vc in $connectedVCs)
   }
 }
 
-$ViServerList = @('NEElmi','NEPhil','SEMelb','SEAtln') # List of known vCenter names
+$ViServerList = @('NEelmi','NEphil','SEmelb','SEatln') # List of known vCenter names
 
 if (-not $foundVC) 
 {

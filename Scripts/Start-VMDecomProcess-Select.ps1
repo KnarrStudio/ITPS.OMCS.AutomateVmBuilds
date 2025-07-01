@@ -15,6 +15,9 @@ param(
   [string]$TenantFolder
 )
 
+# This script has been deprecated and is no longer used.
+# Please use Start-VMDecomProcess-Interactive.ps1 or Start-VMDecomProcess-Clean.ps1 instead.
+
 # Get all VMs matching the input name
 $vms = Get-VM -Name "*$VMName*" -ErrorAction SilentlyContinue
 if (-not $vms) {
